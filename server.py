@@ -142,7 +142,7 @@ class RAGModel:
 			self.document_ids[guild_id][channel_id] = dict()
 		
 		doc = Document(page_content=text, metadata={"source": f"{guild_id}/{channel_id}/{message_id}"})
-		all_splits = text_splitter.split_documents([doc])
+		all_splits = self.text_splitter.split_documents([doc])
 		self.document_ids[guild_id][channel_id][message_id] = {
 			"ids": self.vectordb.add_documents(documents=all_splits, persist_directory=self.db_path),
 			"is_learn": is_learn
