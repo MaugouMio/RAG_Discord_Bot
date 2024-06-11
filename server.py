@@ -106,15 +106,26 @@ class RAGModel:
 		self.dirty_flag = False
 		with open(doc_id_file, "r", encoding="utf8") as f:
 			self.document_ids = json.loads(f.read())
+			
+	def is_learned_document(self, source: str) -> bool:
+		if source not in self.document_ids:
+			return False
+		return self.document_ids[source]["is_learn"]
 	
-	def add_document(self, text: str, source: str) -> bool:
+	def add_document(self, text: str, source: str, is_learn: bool = False) -> bool:
+		# keep original `is_learn` state
+		is_learn = is_learn or self.is_learned_document(source)
+			
 		self.remove_document(source)  # avoid duplicate data
 		if len(text) == 0:
 			return False
 		
 		doc = Document(page_content=text, metadata={"source": source})
 		all_splits = text_splitter.split_documents([doc])
-		self.document_ids[source] = self.vectordb.add_documents(documents=all_splits, persist_directory=self.db_path)
+		self.document_ids[source] = {
+			"ids": self.vectordb.add_documents(documents=all_splits, persist_directory=self.db_path),
+			"is_learn": is_learn
+		}
 		self.dirty_flag = True
 		return True
 
@@ -122,7 +133,7 @@ class RAGModel:
 		if source not in self.document_ids:
 			return False
 		
-		self.vectordb.delete(self.document_ids[source])
+		self.vectordb.delete(self.document_ids[source]["ids"])
 		del self.document_ids[source]
 		self.dirty_flag = True
 		return True
@@ -255,10 +266,11 @@ async def on_raw_message_edit(payload):
 		message = await channel.fetch_message(payload.message_id)
 	
 	source = f"{DISCORD_SERVER_ID}/{payload.channel_id}/{payload.message_id}"
-	if message.pinned:
+	is_learned_document = rag_model.is_learned_document(source)
+	if (AUTO_RECORD_PIN_MESSAGE and message.pinned) or is_learned_document:  # auto record a pinned message or update an already exist message
 		if rag_model.add_document(message.content, source):
 			await message.add_reaction(BOOKMARK_EMOJI)
-	else:
+	elif AUTO_RECORD_PIN_MESSAGE and not message.pinned and not is_learned_document:  # auto remove an unpinned message, which was not learned manually
 		if rag_model.remove_document(source):
 			await message.remove_reaction(BOOKMARK_EMOJI, self_member)
 
@@ -270,7 +282,7 @@ async def learn(interaction: discord.Interaction, url: str):
 	channel = client.get_channel(int(required_ids[0]))
 	message = await channel.fetch_message(int(required_ids[1]))
 	
-	if rag_model.add_document(message.content, f"{DISCORD_SERVER_ID}/{required_ids[0]}/{required_ids[1]}"):
+	if rag_model.add_document(message.content, f"{DISCORD_SERVER_ID}/{required_ids[0]}/{required_ids[1]}", is_learn=True):
 		await message.add_reaction(BOOKMARK_EMOJI)
 		await interaction.followup.send("已成功紀錄訊息！", ephemeral=True)
 	else:
