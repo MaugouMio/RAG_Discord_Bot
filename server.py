@@ -87,7 +87,7 @@ class RAGModel:
 		self.config = RunnableConfig(callbacks=[self.handler])
 		
 		# load prompt template
-		with open("prompt_template", "r", encoding="utf8") as f:
+		with open("prompt", "r", encoding="utf8") as f:
 			prompt = PromptTemplate.from_template(f.read())
 			
 		self.qa = RetrievalQA.from_chain_type(
@@ -171,6 +171,9 @@ ALL_CONFIG = dict()
 with open("config", "r", encoding="utf8") as f:
 	configs = f.read().split('\n')
 	for config in configs:
+		if (config.startswith('#')):
+			continue
+			
 		sep = config.find('=')
 		if sep > 0:
 			ALL_CONFIG[config[:sep].strip()] = config[(sep+1):].strip()

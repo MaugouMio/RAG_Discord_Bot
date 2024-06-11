@@ -1,3 +1,5 @@
 config
+prompt
+
 db/*
 doc_id.json

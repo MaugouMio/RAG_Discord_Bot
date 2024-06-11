@@ -1,0 +1,39 @@
+# Only the following parameters are available
+# Lines starts with '#' will be ignored
+# Strings on the both side of the equation mark (=) will be stripped on both left and right side
+# The commented parameters are the default value of themselves
+
+
+
+# RAG model related ==========================================
+
+# directory where the (Chroma) database will be stored
+# db_path = db
+
+# the JSON file which stores the map from document source to (Chroma) database id
+# doc_id_file = doc_id.json
+
+# sentence transformer model name on huggingface (https://huggingface.co/sentence-transformers)
+# embed_model = intfloat/multilingual-e5-large
+
+# Ollama llm model name, should be pulled in advance
+# ollama_model = llama3
+
+# threshold of the similarity score between the user query and documents in (Chroma) database. (0 means no limit while 1 means the document must be exactly the same as the user query)
+# context_similarity_threshold = 0.7
+
+# max document count that can be returned as context for the llm model to reference
+# max_context_count = 4
+
+
+
+# Discord bot related ==========================================
+
+# discord_bot_token MUST be specified (Check https://hackmd.io/@smallshawn95/python_discord_bot_base for more information about discord bot token)
+discord_bot_token = YourDiscordBotToken
+
+# discord_server_id MUST be specified (Check https://banka.com.tw/how-to-find-discord-related-ids/#t-1676464194051 to see how to get your server ID)
+discord_server_id = TargetDiscordServerID
+
+# whether to learn/forget a message when pinning/unppinning it automatically (set "False" to turn off)
+# auto_record_pin_message = True
