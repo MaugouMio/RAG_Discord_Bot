@@ -107,41 +107,99 @@ class RAGModel:
 		with open(doc_id_file, "r", encoding="utf8") as f:
 			self.document_ids = json.loads(f.read())
 			
-	def is_learned_document(self, source: str) -> bool:
-		if source not in self.document_ids:
+	def is_learned_document(self, guild_id: int, channel_id: int, message_id: int) -> bool:
+		# json keys can only be string
+		guild_id = str(guild_id)
+		channel_id = str(channel_id)
+		message_id = str(message_id)
+		
+		if guild_id not in self.document_ids:
 			return False
-		return self.document_ids[source]["is_learn"]
-	
-	def add_document(self, text: str, source: str, is_learn: bool = False) -> bool:
-		# keep original `is_learn` state
-		is_learn = is_learn or self.is_learned_document(source)
+		if channel_id not in self.document_ids[guild_id]:
+			return False
+		if message_id not in self.document_ids[guild_id][channel_id]:
+			return False
 			
-		self.remove_document(source)  # avoid duplicate data
+		return self.document_ids[guild_id][channel_id][message_id]["is_learn"]
+	
+	def add_document(self, text: str, guild_id: int, channel_id: int, message_id: int, is_learn: bool = False) -> bool:
+		# keep original `is_learn` state
+		is_learn = is_learn or self.is_learned_document(guild_id, channel_id, message_id)
+			
+		self.remove_document(guild_id, channel_id, message_id)  # avoid duplicate data
 		if len(text) == 0:
 			return False
 		
-		doc = Document(page_content=text, metadata={"source": source})
+		# json keys can only be string
+		guild_id = str(guild_id)
+		channel_id = str(channel_id)
+		message_id = str(message_id)
+		
+		# build dict structure
+		if guild_id not in self.document_ids:
+			self.document_ids[guild_id] = dict()
+		if channel_id not in self.document_ids[guild_id]:
+			self.document_ids[guild_id][channel_id] = dict()
+		
+		doc = Document(page_content=text, metadata={"source": f"{guild_id}/{channel_id}/{message_id}"})
 		all_splits = text_splitter.split_documents([doc])
-		self.document_ids[source] = {
+		self.document_ids[guild_id][channel_id][message_id] = {
 			"ids": self.vectordb.add_documents(documents=all_splits, persist_directory=self.db_path),
 			"is_learn": is_learn
 		}
 		self.dirty_flag = True
 		return True
 
-	def remove_document(self, source: str) -> bool:
-		if source not in self.document_ids:
+	def remove_document(self, guild_id: int, channel_id: int, message_id: int) -> bool:
+		# json keys can only be string
+		guild_id = str(guild_id)
+		channel_id = str(channel_id)
+		message_id = str(message_id)
+		
+		if guild_id not in self.document_ids:
+			return False
+		if channel_id not in self.document_ids[guild_id]:
+			return False
+		if message_id not in self.document_ids[guild_id][channel_id]:
 			return False
 		
-		self.vectordb.delete(self.document_ids[source]["ids"])
-		del self.document_ids[source]
+		self.vectordb.delete(self.document_ids[guild_id][channel_id][message_id]["ids"])
+		del self.document_ids[guild_id][channel_id][message_id]
+		# remove empty structure
+		if len(self.document_ids[guild_id][channel_id]) == 0:
+			del self.document_ids[guild_id][channel_id]
+		if len(self.document_ids[guild_id]) == 0:
+			del self.document_ids[guild_id]
+		
 		self.dirty_flag = True
 		return True
+
+	def remove_documents_in_channel(self, guild_id: int, channel_id: int) -> list:
+		# json keys can only be string
+		guild_id = str(guild_id)
+		channel_id = str(channel_id)
+		
+		if guild_id not in self.document_ids:
+			return []
+		if channel_id not in self.document_ids[guild_id]:
+			return []
+		
+		removed_messages = list(self.document_ids[guild_id][channel_id].keys())
+		for message_id in self.document_ids[guild_id][channel_id]:
+			self.vectordb.delete(self.document_ids[guild_id][channel_id][message_id]["ids"])
+			
+		del self.document_ids[guild_id][channel_id]
+		# remove empty structure
+		if len(self.document_ids[guild_id]) == 0:
+			del self.document_ids[guild_id]
+		
+		self.dirty_flag = True
+		return removed_messages
 		
 	def save_documents(self):
 		if self.dirty_flag:
 			with open(self.doc_id_file, "w", encoding="utf8") as f:
-				f.write(json.dumps(self.document_ids, indent=4))
+				f.write(json.dumps(self.document_ids, indent=2))
 				
 			print(f"\n[{datetime.now()}] Document IDs Saved! ==================\n")
 			self.dirty_flag = False
@@ -251,7 +309,11 @@ async def auto_save_loop():
 @client.event
 async def on_ready():
 	global self_member
+	
 	await tree.sync(guild=discord.Object(id=DISCORD_SERVER_ID))
+	# For possible future support of multi-server bot
+	# for guild in client.guilds:
+		# await tree.sync(guild=discord.Object(id=guild.id))
 	
 	guild = client.get_guild(DISCORD_SERVER_ID)
 	self_member = guild.get_member(client.user.id)
@@ -265,24 +327,28 @@ async def on_raw_message_edit(payload):
 		channel = client.get_channel(payload.channel_id)
 		message = await channel.fetch_message(payload.message_id)
 	
-	source = f"{DISCORD_SERVER_ID}/{payload.channel_id}/{payload.message_id}"
-	is_learned_document = rag_model.is_learned_document(source)
+	is_learned_document = rag_model.is_learned_document(payload.guild_id, payload.channel_id, payload.message_id)
 	if (AUTO_RECORD_PIN_MESSAGE and message.pinned) or is_learned_document:  # auto record a pinned message or update an already exist message
-		if rag_model.add_document(message.content, source):
+		if rag_model.add_document(message.content, payload.guild_id, payload.channel_id, payload.message_id):
 			await message.add_reaction(BOOKMARK_EMOJI)
 	elif AUTO_RECORD_PIN_MESSAGE and not message.pinned and not is_learned_document:  # auto remove an unpinned message, which was not learned manually
-		if rag_model.remove_document(source):
+		if rag_model.remove_document(payload.guild_id, payload.channel_id, payload.message_id):
 			await message.remove_reaction(BOOKMARK_EMOJI, self_member)
 
 @tree.command(name="learn", description="我叫你記", guild=discord.Object(id=DISCORD_SERVER_ID))
 @app_commands.describe(url = "訊息連結")
 async def learn(interaction: discord.Interaction, url: str):
 	await interaction.response.defer(ephemeral=True)
-	required_ids = url.split('/')[-2:]  # [ channel_id, message_id ]
-	channel = client.get_channel(int(required_ids[0]))
-	message = await channel.fetch_message(int(required_ids[1]))
 	
-	if rag_model.add_document(message.content, f"{DISCORD_SERVER_ID}/{required_ids[0]}/{required_ids[1]}", is_learn=True):
+	required_ids = url.split('/')[-3:]
+	guild_id = int(required_ids[0])
+	channel_id = int(required_ids[1])
+	message_id = int(required_ids[2])
+	
+	channel = client.get_channel(channel_id)
+	message = await channel.fetch_message(message_id)
+	
+	if rag_model.add_document(message.content, guild_id, channel_id, message_id, is_learn=True):
 		await message.add_reaction(BOOKMARK_EMOJI)
 		await interaction.followup.send("已成功紀錄訊息！", ephemeral=True)
 	else:
@@ -293,11 +359,15 @@ async def learn(interaction: discord.Interaction, url: str):
 async def forget(interaction: discord.Interaction, url: str):
 	await interaction.response.defer(ephemeral=True)
 	
-	required_ids = url.split('/')[-2:]  # [ channel_id, message_id ]
-	channel = client.get_channel(int(required_ids[0]))
-	message = await channel.fetch_message(int(required_ids[1]))
+	required_ids = url.split('/')[-3:]
+	guild_id = int(required_ids[0])
+	channel_id = int(required_ids[1])
+	message_id = int(required_ids[2])
 	
-	if rag_model.remove_document(f"{DISCORD_SERVER_ID}/{required_ids[0]}/{required_ids[1]}"):
+	channel = client.get_channel(channel_id)
+	message = await channel.fetch_message(message_id)
+	
+	if rag_model.remove_document(guild_id, channel_id, message_id):
 		await message.remove_reaction(BOOKMARK_EMOJI, self_member)
 		await interaction.followup.send("已成功刪除紀錄！", ephemeral=True)
 	else:
@@ -337,13 +407,28 @@ async def load_all_pins(interaction: discord.Interaction):
 		pin_num = len(all_pins)
 		for i in range(pin_num):
 			message = all_pins[i]
-			source = f"{DISCORD_SERVER_ID}/{channel.id}/{message.id}"
+			source = f"{interaction.guild_id}/{channel.id}/{message.id}"
 			print("[loadallpins] Loading", source, f"({i + 1}/{pin_num})")
 			
-			rag_model.add_document(message.content, source)
+			rag_model.add_document(message.content, interaction.guild_id, channel.id, message.id)
 			await message.add_reaction(BOOKMARK_EMOJI)
 			
 	await interaction.followup.send("所有釘選訊息載入完成！")
+
+@tree.command(name="forgetchannel", description="將當前頻道內所有紀錄的訊息從資料庫中移除", guild=discord.Object(id=DISCORD_SERVER_ID))
+async def forget_channel(interaction: discord.Interaction):
+	await interaction.response.defer()
+	
+	removed_messages = rag_model.remove_documents_in_channel(interaction.guild_id, interaction.channel_id)
+	channel = interaction.channel
+	for message_id in removed_messages:
+		try:
+			message = await channel.fetch_message(message_id)
+			await message.remove_reaction(BOOKMARK_EMOJI, self_member)
+		except:
+			pass
+			
+	await interaction.followup.send("已移除當前頻道所有訊息紀錄！")
 
 # start discord bot
 client.run(ALL_CONFIG["discord_bot_token"])
